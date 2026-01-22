@@ -47,7 +47,7 @@
                         <span id="libStatusText">正在檢查核心元件...</span>
                     </span>
                     <button id="retryLibBtn" class="hidden text-xs text-blue-600 hover:underline flex items-center gap-1">
-                        <i data-lucide="rotate-cw" class="w-3 h-3"></i> 點此重試載入
+                        <i data-lucide="rotate-cw" class="w-3 h-3"></i> 嘗試備用路徑載入
                     </button>
                 </div>
             </div>
@@ -69,7 +69,7 @@
                     <div class="flex flex-col items-center">
                         <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
                         <p class="text-slate-700 font-medium">正在處理壓縮檔...</p>
-                        <p class="text-xs text-slate-400 mt-2">大型檔案或解密可能需要較長時間</p>
+                        <p class="text-xs text-slate-400 mt-2">大型檔案或加密檔案需要更多運算時間</p>
                     </div>
                 </div>
             </div>
@@ -90,23 +90,26 @@
 
             <div id="messageBox" class="hidden mt-4 p-4 rounded-lg text-sm whitespace-pre-line"></div>
         </div>
+
+        <!-- 偵錯資訊輸出 -->
+        <div id="debugInfo" class="mt-4 text-[10px] text-slate-400 font-mono text-center"></div>
     </div>
 
-    <!-- 核心腳本載入 -->
+    <!-- 預設載入腳本 -->
     <script id="archiveScript" src="https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/libarchive.js"></script>
 
     <script>
-        // 安全初始化 Lucide 的函數
+        const CDN_LIST = [
+            'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/libarchive.js',
+            'https://unpkg.com/libarchive.js@1.3.0/dist/libarchive.js'
+        ];
+        let currentCdnIndex = 0;
+
         function initIcons() {
             if (typeof lucide !== 'undefined') {
                 lucide.createIcons();
-            } else {
-                console.warn('Lucide library not yet loaded.');
             }
         }
-
-        // 頁面初次載入嘗試初始化
-        window.addEventListener('load', initIcons);
 
         const libStatusBadge = document.getElementById('libStatusBadge');
         const libStatusText = document.getElementById('libStatusText');
@@ -120,25 +123,33 @@
         const fileCount = document.getElementById('fileCount');
         const resetBtn = document.getElementById('resetBtn');
         const messageBox = document.getElementById('messageBox');
+        const debugInfo = document.getElementById('debugInfo');
 
-        let isInitialized = false;
+        let isEngineInitialized = false;
 
-        function updateStatus(status) {
+        function logDebug(msg) {
+            const time = new Date().toLocaleTimeString();
+            debugInfo.innerHTML += `[${time}] ${msg}<br>`;
+        }
+
+        function updateStatus(status, detail = '') {
             libStatusBadge.className = "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ";
             if (status === 'ready') {
                 libStatusBadge.classList.add("bg-green-100", "text-green-800");
                 libStatusText.textContent = "解壓引擎：就緒";
                 retryLibBtn.classList.add('hidden');
+                logDebug("引擎已準備就緒");
             } else if (status === 'loading') {
                 libStatusBadge.classList.add("bg-blue-100", "text-blue-800");
                 libStatusText.textContent = "解壓引擎：正在載入...";
                 retryLibBtn.classList.add('hidden');
             } else {
                 libStatusBadge.classList.add("bg-red-100", "text-red-800");
-                libStatusText.textContent = "解壓引擎：載入失敗";
+                libStatusText.textContent = `解壓引擎：${detail || '載入失敗'}`;
                 retryLibBtn.classList.remove('hidden');
+                logDebug(`載入失敗: ${detail}`);
             }
-            initIcons(); // 狀態改變時重繪圖標
+            initIcons();
         }
 
         function checkLib() {
@@ -149,27 +160,35 @@
             return false;
         }
 
-        // 腳本重新載入邏輯
-        function loadArchiveScript() {
+        async function loadArchiveScript() {
             updateStatus('loading');
             const oldScript = document.getElementById('archiveScript');
             if (oldScript) oldScript.remove();
             
             const script = document.createElement('script');
             script.id = 'archiveScript';
-            script.src = `https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/libarchive.js?t=${Date.now()}`;
-            script.onload = checkLib;
-            script.onerror = () => updateStatus('error');
+            // 切換 CDN
+            const nextCdn = CDN_LIST[currentCdnIndex % CDN_LIST.length];
+            script.src = `${nextCdn}?t=${Date.now()}`;
+            currentCdnIndex++;
+            
+            logDebug(`嘗試從 ${nextCdn} 載入...`);
+
+            script.onload = () => {
+                if (!checkLib()) updateStatus('error', 'Script loaded but Archive undefined');
+            };
+            script.onerror = () => {
+                updateStatus('error', '網路連線被阻擋 (Network Error)');
+            };
             document.head.appendChild(script);
         }
 
         window.onload = () => {
             initIcons();
-            if (!checkLib()) {
-                setTimeout(() => {
-                    if (!checkLib()) updateStatus('error');
-                }, 2000);
-            }
+            logDebug("頁面載入中...");
+            setTimeout(() => {
+                if (!checkLib()) updateStatus('error', '等待逾時');
+            }, 3000);
         };
 
         retryLibBtn.onclick = (e) => {
@@ -178,10 +197,16 @@
         };
 
         async function createWorkerBlobUrl(url) {
-            const response = await fetch(url);
-            const script = await response.text();
-            const blob = new Blob([script], { type: 'application/javascript' });
-            return URL.createObjectURL(blob);
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const script = await response.text();
+                const blob = new Blob([script], { type: 'application/javascript' });
+                return URL.createObjectURL(blob);
+            } catch (e) {
+                logDebug(`Worker 抓取失敗: ${e.message}`);
+                throw e;
+            }
         }
 
         dropZone.addEventListener('click', () => fileInput.click());
@@ -200,13 +225,8 @@
         resetBtn.addEventListener('click', () => location.reload());
 
         async function handleFile(file) {
-            if (!checkLib()) {
-                showMessage('解壓引擎尚未就緒。請確認網路連接並點擊上方的「重試載入」。', 'error');
-                return;
-            }
-
-            if (!file.name.toLowerCase().endsWith('.7z')) {
-                showMessage('錯誤：請上傳 .7z 格式的檔案。', 'error');
+            if (typeof Archive === 'undefined') {
+                showMessage('錯誤：核心函式庫尚未載入。', 'error');
                 return;
             }
 
@@ -215,11 +235,14 @@
             messageBox.classList.add('hidden');
 
             try {
-                if (!isInitialized) {
+                if (!isEngineInitialized) {
+                    logDebug("正在初始化 WebWorker...");
+                    // 嘗試不同來源的 Worker
                     const workerUrl = 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/worker-bundle.js';
                     const blobUrl = await createWorkerBlobUrl(workerUrl);
                     await Archive.init({ workerPath: blobUrl });
-                    isInitialized = true;
+                    isEngineInitialized = true;
+                    logDebug("WebWorker 初始化成功");
                 }
 
                 const archive = await Archive.open(file);
@@ -229,7 +252,8 @@
                 resultSection.classList.remove('hidden');
             } catch (err) {
                 console.error(err);
-                showMessage(`處理失敗：${err.message}`, 'error');
+                logDebug(`執行錯誤: ${err.message}`);
+                showMessage(`解壓失敗：${err.message}\n提示：若是大型檔案，瀏覽器可能會因記憶體限制而中斷。`, 'error');
                 uploadContent.classList.remove('hidden');
                 loadingStatus.classList.add('hidden');
             }
