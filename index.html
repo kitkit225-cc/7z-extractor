@@ -238,7 +238,7 @@
                 if (!isEngineInitialized) {
                     logDebug("正在初始化 WebWorker...");
                     // 嘗試不同來源的 Worker
-                    const workerUrl = 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/worker-bundle.js';
+                    const workerUrl = './worker-bundle.js';
                     const blobUrl = await createWorkerBlobUrl(workerUrl);
                     await Archive.init({ workerPath: blobUrl });
                     isEngineInitialized = true;
